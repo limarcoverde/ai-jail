@@ -1705,7 +1705,10 @@ fn discover_mounts_full(
     let proxy_env = if config.network_mode()
         == crate::config::NetworkMode::Filtered
     {
-        let mut vars = crate::proxy::env_vars(crate::proxy::BRIDGE_PORT);
+        let mut vars = crate::proxy::env_vars(
+            crate::proxy::BRIDGE_PORT,
+            config.forward_ports(),
+        );
         if lockdown {
             for key in config.secret_hosts.keys() {
                 if let Some(value) = config.env_pass.iter().find_map(|entry| {

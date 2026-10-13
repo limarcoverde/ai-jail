@@ -178,7 +178,8 @@ fn apply_child_env(
     if config.network_mode() == crate::config::NetworkMode::Filtered
         && let Some(port) = proxy_port
     {
-        for (key, value) in crate::proxy::env_vars(port) {
+        for (key, value) in crate::proxy::env_vars(port, config.forward_ports())
+        {
             cmd.env(key, value);
         }
     }
@@ -652,6 +653,27 @@ fn push_network_section(
         }
         _ => {}
     }
+    push_forward_ports_section(profile, config);
+}
+
+/// `--forward-port`: Seatbelt shares the host's network stack, so a
+/// forwarded port needs no relay (unlike the Linux netns bridge) -- only
+/// an outbound rule naming that host loopback port. Every other loopback
+/// port stays refused by the deny-default profile. `--network` is
+/// refused together with `--forward-port` at launch, so this never
+/// widens an unrestricted profile.
+fn push_forward_ports_section(profile: &mut String, config: &Config) {
+    let ports = config.forward_ports();
+    if ports.is_empty() {
+        return;
+    }
+    profile.push_str("; Forwarded host loopback ports (--forward-port)\n");
+    for port in ports {
+        profile.push_str(&format!(
+            "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+        ));
+    }
+    profile.push('\n');
 }
 
 /// Codex 0.16x moved the interactive client onto a persistent app-server
@@ -1710,6 +1732,83 @@ mod tests {
         );
         assert!(!off_profile.contains("network-outbound"));
         assert!(!off_profile.contains("remote ip"));
+    }
+
+    #[test]
+    fn sbpl_profile_forward_port_allows_only_that_loopback_port() {
+        let config = Config {
+            forward_ports: vec![49374],
+            ..Config::default()
+        };
+        let profile =
+            generate_sbpl_profile(&config, Path::new("/tmp/test-project"));
+        assert!(profile.contains(
+            "(allow network-outbound (remote ip \"localhost:49374\"))"
+        ));
+        // No blanket rules: every other port, local or remote, stays
+        // denied by default.
+        assert!(!profile.contains("(allow network-outbound)\n"));
+        assert!(!profile.contains("(allow network-inbound)"));
+        assert!(!profile.contains("network-bind"));
+
+        let without = generate_sbpl_profile(
+            &Config::default(),
+            Path::new("/tmp/test-project"),
+        );
+        assert!(!without.contains("49374"));
+    }
+
+    #[test]
+    fn sbpl_profile_forward_port_composes_with_filtered_egress() {
+        let config = Config {
+            allow_hosts: vec!["api.anthropic.com".into()],
+            forward_ports: vec![49374, 5432],
+            ..Config::default()
+        };
+        let profile = generate_sbpl_profile_filtered(
+            &config,
+            Path::new("/tmp/test-project"),
+            15919,
+        );
+        for port in [15919, 49374, 5432] {
+            assert!(
+                profile.contains(&format!(
+                    "(allow network-outbound (remote ip \"localhost:{port}\"))"
+                )),
+                "port {port}"
+            );
+        }
+        assert!(!profile.contains("(allow network-outbound)\n"));
+    }
+
+    #[test]
+    fn build_child_env_forward_port_exempts_loopback_from_proxy() {
+        let _env = ENV_LOCK.lock().unwrap();
+        // Proxy-aware clients would otherwise send the forwarded
+        // loopback service to the CONNECT proxy, which refuses it.
+        let config = Config {
+            command: vec!["bash".into()],
+            no_mise: Some(true),
+            allow_hosts: vec!["api.anthropic.com".into()],
+            forward_ports: vec![49374],
+            ..Config::default()
+        };
+        let cmd = build(
+            &config,
+            Path::new("/tmp/test-project"),
+            false,
+            None,
+            Some(15919),
+        );
+        let env: std::collections::HashMap<_, _> = cmd.get_envs().collect();
+        let get = |k: &str| env.get(std::ffi::OsStr::new(k)).copied().flatten();
+        let loopback = std::ffi::OsStr::new(crate::proxy::LOOPBACK_NO_PROXY);
+        assert_eq!(get("no_proxy"), Some(loopback));
+        assert_eq!(get("NO_PROXY"), Some(loopback));
+        assert_eq!(
+            get("http_proxy"),
+            Some(std::ffi::OsStr::new("http://127.0.0.1:15919"))
+        );
     }
 
     #[test]

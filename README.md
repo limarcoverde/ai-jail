@@ -220,13 +220,23 @@ sandbox's own `127.0.0.1:49374` and pumps into it. The agent starts only
 once every bridge is listening, and a bridge that cannot bind fails the
 launch. The private network namespace stays up; every other host port stays
 unreachable. It combines with filtered egress and `--lockdown` (the port
-joins the Landlock V4 connect allow set), and is Linux-only. Ports below
-1024 are refused: the sandbox cannot bind them.
+joins the Landlock V4 connect allow set). Ports below 1024 are refused: the
+sandbox cannot bind them.
+
+On macOS the Seatbelt sandbox shares the host's network stack, so there is
+no bridge: the profile gets one `(allow network-outbound (remote ip
+"localhost:PORT"))` rule per forwarded port, next to the egress proxy's, and
+every other loopback port stays denied. The same port rules apply.
+
+Under filtered egress the proxy env would send `http://127.0.0.1:PORT` to the
+CONNECT proxy, which refuses loopback targets, so a forward also sets
+`no_proxy`/`NO_PROXY` to `127.0.0.1,localhost,::1`. That exempts nothing
+reachable: loopback ports that are not forwarded stay closed.
 
 It cannot combine with `--network`, where the host loopback is already
-reachable, and it is refused outside Linux — so a `forward_ports` entry in
-the global config fails every `--network` or `--browser` launch, and every
-launch on macOS; put it under a command-specific table instead.
+reachable, and it is refused outside Linux and macOS — so a `forward_ports`
+entry in the global config fails every `--network` or `--browser` launch; put
+it under a command-specific table instead.
 
 A forwarded port is trusted in full: there is no allowlist, inspection or
 audit record on it, so the agent can do whatever the service behind it
@@ -540,7 +550,7 @@ ai-jail [OPTIONS] [--] [COMMAND [ARGS...]]
 --deny-path PATH|GLOB           deny project paths
 --agent-state / --no-agent-state  mount the command's credential state (default off)
 --env NAME[=VALUE]              forward or set an environment variable (repeatable)
---forward-port PORT             relay host 127.0.0.1:PORT into the sandbox (Linux, repeatable)
+--forward-port PORT             relay host 127.0.0.1:PORT into the sandbox (Linux and macOS, repeatable)
 --inherit-env / --no-inherit-env  pass the full parent environment (default: allowlist)
 --update-check / --no-update-check  host-side version check (default off)
 --lockdown / --no-lockdown      strict read-only mode, no network by default

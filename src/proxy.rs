@@ -865,7 +865,16 @@ pub(crate) fn default_socket_path() -> PathBuf {
 /// (post-`--clearenv`, so nothing else can precede it). `no_proxy` is
 /// emptied explicitly: an inherited exclusion would route around the
 /// proxy straight into the netns wall.
-pub(crate) fn env_vars(port: u16) -> Vec<(String, String)> {
+///
+/// With `--forward-port`, loopback is exempted instead: proxy-aware
+/// clients (curl, reqwest) otherwise send `http://127.0.0.1:PORT` to the
+/// CONNECT proxy, which refuses loopback targets, so the forward would
+/// never be used. The exemption opens nothing: loopback ports that are
+/// not forwarded stay unreachable inside the sandbox.
+pub(crate) fn env_vars(
+    port: u16,
+    forward_ports: &[u16],
+) -> Vec<(String, String)> {
     let url = format!("http://127.0.0.1:{port}");
     let mut vars: Vec<(String, String)> = [
         "http_proxy",
@@ -878,10 +887,18 @@ pub(crate) fn env_vars(port: u16) -> Vec<(String, String)> {
     .iter()
     .map(|key| ((*key).to_string(), url.clone()))
     .collect();
-    vars.push(("no_proxy".to_string(), String::new()));
-    vars.push(("NO_PROXY".to_string(), String::new()));
+    let no_proxy = if forward_ports.is_empty() {
+        String::new()
+    } else {
+        LOOPBACK_NO_PROXY.to_string()
+    };
+    vars.push(("no_proxy".to_string(), no_proxy.clone()));
+    vars.push(("NO_PROXY".to_string(), no_proxy));
     vars
 }
+
+/// Loopback names exempted from the proxy when a port is forwarded.
+pub(crate) const LOOPBACK_NO_PROXY: &str = "127.0.0.1,localhost,::1";
 
 /// Env var asking the bridge to print `ready` on stdout once bound.
 pub(crate) const BRIDGE_READY_ENV: &str = "AI_JAIL_BRIDGE_READY";

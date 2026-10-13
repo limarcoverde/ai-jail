@@ -237,8 +237,10 @@ fn validate_forward_ports(config: &config::Config) -> Result<(), String> {
     if config.forward_ports().is_empty() {
         return Ok(());
     }
-    if cfg!(not(target_os = "linux")) {
-        return Err("--forward-port is Linux-only: it relays across the sandbox's private network namespace".into());
+    if cfg!(not(any(target_os = "linux", target_os = "macos"))) {
+        return Err(
+            "--forward-port is supported on Linux and macOS only".into()
+        );
     }
     if config.network_enabled() {
         return Err("--network and --forward-port are mutually exclusive: with unrestricted network the host's loopback is already reachable".into());
@@ -1435,10 +1437,10 @@ mod tests {
             ..Config::default()
         };
         let error = validate_network_flags(&with_network).unwrap_err();
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
             assert!(error.contains("mutually exclusive"), "{error}");
         } else {
-            assert!(error.contains("Linux-only"), "{error}");
+            assert!(error.contains("Linux and macOS only"), "{error}");
         }
         for port in [0, 80, 443, 1023, crate::proxy::BRIDGE_PORT] {
             let config = Config {
@@ -1455,7 +1457,7 @@ mod tests {
         };
         assert_eq!(
             validate_network_flags(&ok).is_ok(),
-            cfg!(target_os = "linux")
+            cfg!(any(target_os = "linux", target_os = "macos"))
         );
     }
 
